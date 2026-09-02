@@ -1,0 +1,19 @@
+[Unit]
+Description=TemporalRCA autonomous worker %i
+After=network-online.target
+
+[Service]
+Type=simple
+User=temporalrca-worker
+Environment=WORKER_NAME=worker-%i
+ExecStart=/usr/bin/python3 /opt/temporalrca/worker.py
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+

@@ -1,0 +1,3 @@
+d /var/lib/temporalrca-agent 0750 temporalrca-agent temporalrca-agent -
+d /etc/temporalrca-agent 0750 root temporalrca-agent -
+

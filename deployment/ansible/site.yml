@@ -1,0 +1,26 @@
+---
+- name: Prepare every monitored host
+  hosts: all
+  become: true
+  roles:
+    - common
+    - agent
+
+- name: Run the central platform, producer, PostgreSQL, and Redis
+  hosts: central
+  become: true
+  roles:
+    - vm1
+
+- name: Run non-containerized workers
+  hosts: workers
+  become: true
+  roles:
+    - vm2
+
+- name: Run containerized consumers and file processing
+  hosts: consumers
+  become: true
+  roles:
+    - vm3
+

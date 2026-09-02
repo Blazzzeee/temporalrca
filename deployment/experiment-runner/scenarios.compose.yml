@@ -1,0 +1,7 @@
+experiments:
+  - name: compose-cpu-pressure
+    scenario: cpu_pressure
+    host: compose-lab
+    duration_seconds: 3
+    parameters:
+      workers: 1

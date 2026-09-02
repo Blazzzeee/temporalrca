@@ -1,0 +1,94 @@
+services:
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - redis-data:/data
+    ports: ["6379:6379"]
+    restart: unless-stopped
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: workload
+      POSTGRES_PASSWORD: workload
+      POSTGRES_DB: workload
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workload -d workload"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports: ["5432:5432"]
+    restart: unless-stopped
+  consumer-1:
+    build:
+      # The workload Dockerfile installs the shared agent and its config, so
+      # the Compose context must include all three repository directories.
+      context: .
+      dockerfile: demo-workload/Dockerfile
+      target: runtime
+    command: consumer
+    environment:
+      TEMPORALRCA_SERVER_URL: "{{ temporalrca_server_url }}"
+      REDIS_URL: redis://redis:6379/0
+      MONITORED_DATABASE_URL: postgresql://workload:workload@postgres/workload
+      SERVICE_NAME: vm3-consumer-1
+      LOG_FILE: /var/log/temporalrca/demo.jsonl
+    volumes:
+      - ./logs:/var/log/temporalrca
+    ports: ["9102:9100"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+  consumer-2:
+    build:
+      context: .
+      dockerfile: demo-workload/Dockerfile
+      target: runtime
+    command: consumer
+    environment:
+      TEMPORALRCA_SERVER_URL: "{{ temporalrca_server_url }}"
+      REDIS_URL: redis://redis:6379/0
+      MONITORED_DATABASE_URL: postgresql://workload:workload@postgres/workload
+      SERVICE_NAME: vm3-consumer-2
+      LOG_FILE: /var/log/temporalrca/demo.jsonl
+    volumes:
+      - ./logs:/var/log/temporalrca
+    ports: ["9103:9100"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+  file-processor:
+    build:
+      context: .
+      dockerfile: demo-workload/Dockerfile
+      target: runtime
+    command: file-processor
+    environment:
+      TEMPORALRCA_SERVER_URL: "{{ temporalrca_server_url }}"
+      SERVICE_NAME: vm3-file-processor
+      WORK_DIR: /work
+      LOG_FILE: /var/log/temporalrca/demo.jsonl
+    volumes:
+      # The image's runtime user owns /work; mounting there keeps the
+      # continuous file workload non-root and writable.
+      - files:/work
+      - ./logs:/var/log/temporalrca
+    ports: ["9104:9100"]
+    restart: unless-stopped
+volumes:
+  files: {}
+  postgres-data: {}
+  redis-data: {}

@@ -1,0 +1,44 @@
+---
+- name: Copy demo workload
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../demo-workload/"
+    dest: /opt/temporalrca/vm3/demo-workload/
+    mode: preserve
+
+- name: Create VM3 image-build config directory
+  ansible.builtin.file:
+    path: /opt/temporalrca/vm3/config
+    state: directory
+    mode: "0755"
+
+- name: Copy agent source for workload image builds
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../agent/"
+    dest: /opt/temporalrca/vm3/agent/
+    mode: preserve
+
+- name: Copy container agent configuration for workload image builds
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../config/agent.container.toml"
+    dest: /opt/temporalrca/vm3/config/agent.container.toml
+    mode: "0644"
+
+- name: Create writable VM3 workload log directory
+  ansible.builtin.file:
+    path: /opt/temporalrca/vm3/logs
+    state: directory
+    owner: "10001"
+    group: "10001"
+    mode: "0750"
+
+- name: Render VM3 Compose project
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: /opt/temporalrca/vm3/compose.yml
+    mode: "0644"
+
+- name: Start VM3 consumers and file processor
+  ansible.builtin.command:
+    cmd: docker compose up -d --build
+    chdir: /opt/temporalrca/vm3
+  changed_when: true

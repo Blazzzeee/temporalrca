@@ -1,0 +1,13 @@
+---
+- name: Copy monorepo for the central Compose project
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../"
+    dest: /opt/temporalrca/project/
+    mode: preserve
+
+- name: Start central platform and VM1 workloads
+  ansible.builtin.command:
+    cmd: docker compose --profile workloads up -d --build
+    chdir: /opt/temporalrca/project
+  changed_when: true
+

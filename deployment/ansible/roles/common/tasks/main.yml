@@ -1,0 +1,33 @@
+---
+- name: Install host runtime and fault-injection tools
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - docker.io
+      - docker-compose-v2
+      - fio
+      - iproute2
+      - postgresql-client
+      - python3
+      - python3-venv
+      - redis-tools
+      - stress-ng
+    state: present
+    update_cache: true
+
+- name: Ensure Docker group exists for non-root collectors
+  ansible.builtin.group:
+    name: docker
+    state: present
+
+- name: Enable Docker
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Create deployment directory
+  ansible.builtin.file:
+    path: /opt/temporalrca
+    state: directory
+    mode: "0755"

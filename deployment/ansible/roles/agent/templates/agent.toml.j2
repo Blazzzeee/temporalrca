@@ -1,0 +1,99 @@
+central_server = "{{ temporalrca_server_url }}"
+enrollment_token = "{{ temporalrca_enrollment_token }}"
+host_name = "{{ inventory_hostname }}"
+collection_interval_seconds = 1
+discovery_interval_seconds = 5
+spool_max_bytes = 536870912
+spool_max_age_seconds = 86400
+
+{% if 'central' in group_names %}
+[[services]]
+service = "producer"
+command_regex = "workload producer"
+
+[[services]]
+service = "consumer"
+command_regex = "workload consumer"
+{% endif %}
+
+[[services]]
+service = "demo-workloads"
+command_regex = "temporalrca|workload"
+
+{% if 'workers' in group_names %}
+[[logs]]
+name = "worker-1"
+type = "journald"
+unit = "temporalrca-worker@1.service"
+
+[[logs]]
+name = "worker-2"
+type = "journald"
+unit = "temporalrca-worker@2.service"
+
+[[logs]]
+name = "worker-3"
+type = "journald"
+unit = "temporalrca-worker@3.service"
+{% endif %}
+{% if 'central' in group_names %}
+
+[[metrics]]
+name = "producer"
+url = "http://127.0.0.1:9101/metrics"
+service = "producer"
+
+[[dependencies]]
+name = "workload-postgres"
+type = "postgresql"
+dsn = "postgresql://workload:workload@127.0.0.1:5433/workload"
+services = ["producer", "consumer"]
+interval_seconds = 5
+
+[[dependencies]]
+name = "workload-redis"
+type = "redis"
+dsn = "redis://127.0.0.1:6379/0"
+queues = ["temporalrca:jobs"]
+services = ["producer", "consumer"]
+interval_seconds = 5
+{% endif %}
+{% if 'consumers' in group_names %}
+
+[[logs]]
+name = "vm3-structured-logs"
+type = "file"
+path = "/opt/temporalrca/vm3/logs/demo.jsonl"
+max_line_bytes = 65536
+max_lines_per_second = 1000
+
+[[metrics]]
+name = "consumer-1"
+url = "http://127.0.0.1:9102/metrics"
+service = "demo-workloads"
+
+[[metrics]]
+name = "consumer-2"
+url = "http://127.0.0.1:9103/metrics"
+service = "demo-workloads"
+
+[[metrics]]
+name = "file-processor"
+url = "http://127.0.0.1:9104/metrics"
+service = "demo-workloads"
+
+[[dependencies]]
+name = "workload-postgres"
+type = "postgresql"
+dsn = "postgresql://workload:workload@127.0.0.1:5432/workload"
+services = ["demo-workloads"]
+interval_seconds = 5
+
+[[dependencies]]
+name = "workload-redis"
+type = "redis"
+dsn = "redis://127.0.0.1:6379/0"
+queues = ["temporalrca:jobs"]
+services = ["demo-workloads"]
+interval_seconds = 5
+{% endif %}

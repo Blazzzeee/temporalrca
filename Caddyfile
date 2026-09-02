@@ -1,0 +1,20 @@
+{$CADDY_HOST::80} {
+	encode zstd gzip
+
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle /health/* {
+		reverse_proxy api:8000
+	}
+
+	handle /metrics {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		reverse_proxy dashboard:3000
+	}
+}
+

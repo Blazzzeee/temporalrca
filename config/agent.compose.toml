@@ -1,0 +1,154 @@
+central_server = "http://api:8000"
+host_name = "yoga-7"
+state_dir = "/var/lib/temporalrca-agent"
+proc_root = "/host/proc"
+collection_interval_seconds = 15
+discovery_interval_seconds = 15
+max_monitored_processes = 50
+spool_max_bytes = 536870912
+spool_max_age_seconds = 86400
+docker_socket = "/var/run/docker.sock"
+docker_collection_enabled = true
+docker_collection_interval_seconds = 10
+
+[[services]]
+service = "producer"
+command_regex = "^python -m workload producer$"
+
+[[services]]
+service = "consumer"
+command_regex = "^python -m workload consumer$"
+
+[[services]]
+service = "file-processor"
+command_regex = "^python -m workload file-processor$"
+
+[[services]]
+service = "burst-producer"
+command_regex = "^python -m workload burst-producer$"
+
+[[services]]
+service = "priority-producer"
+command_regex = "^python -m workload priority-producer$"
+
+[[services]]
+service = "consumer-b"
+command_regex = "^python -m workload consumer-b$"
+
+[[services]]
+service = "priority-consumer"
+command_regex = "^python -m workload priority-consumer$"
+
+[[services]]
+service = "scheduled-consumer"
+command_regex = "^python -m workload scheduled-consumer$"
+
+[[services]]
+service = "report-cron"
+command_regex = "^python -m workload report-cron$"
+
+[[services]]
+service = "cleanup-cron"
+command_regex = "^python -m workload cleanup-cron$"
+
+[[services]]
+service = "event-publisher"
+command_regex = "^python -m workload event-publisher$"
+
+[[services]]
+service = "event-worker"
+command_regex = "^python -m workload event-worker$"
+
+[[services]]
+service = "database-worker"
+command_regex = "^python -m workload database-worker$"
+
+[[logs]]
+name = "demo-structured-logs"
+type = "file"
+path = "/var/log/temporalrca/demo.jsonl"
+max_line_bytes = 65536
+max_lines_per_second = 1000
+
+[[metrics]]
+name = "producer"
+url = "http://producer:9100/metrics"
+service = "producer"
+
+[[metrics]]
+name = "consumer"
+url = "http://consumer:9100/metrics"
+service = "consumer"
+
+[[metrics]]
+name = "file-processor"
+url = "http://file-processor:9100/metrics"
+service = "file-processor"
+
+[[metrics]]
+name = "burst-producer"
+url = "http://burst-producer:9100/metrics"
+service = "burst-producer"
+
+[[metrics]]
+name = "priority-producer"
+url = "http://priority-producer:9100/metrics"
+service = "priority-producer"
+
+[[metrics]]
+name = "consumer-b"
+url = "http://consumer-b:9100/metrics"
+service = "consumer-b"
+
+[[metrics]]
+name = "priority-consumer"
+url = "http://priority-consumer:9100/metrics"
+service = "priority-consumer"
+
+[[metrics]]
+name = "scheduled-consumer"
+url = "http://scheduled-consumer:9100/metrics"
+service = "scheduled-consumer"
+
+[[metrics]]
+name = "report-cron"
+url = "http://report-cron:9100/metrics"
+service = "report-cron"
+
+[[metrics]]
+name = "cleanup-cron"
+url = "http://cleanup-cron:9100/metrics"
+service = "cleanup-cron"
+
+[[metrics]]
+name = "event-publisher"
+url = "http://event-publisher:9100/metrics"
+service = "event-publisher"
+
+[[metrics]]
+name = "event-worker"
+url = "http://event-worker:9100/metrics"
+service = "event-worker"
+
+[[metrics]]
+name = "database-worker"
+url = "http://database-worker:9100/metrics"
+service = "database-worker"
+
+[[dependencies]]
+name = "workload-postgres"
+type = "postgresql"
+dsn = "postgresql://workload:workload@monitored-postgres:5432/workload"
+services = ["consumer", "consumer-b", "priority-consumer", "scheduled-consumer", "event-worker", "database-worker"]
+interval_seconds = 10
+pg_stat_statements = false
+
+[[dependencies]]
+name = "workload-redis"
+type = "redis"
+dsn = "redis://redis:6379/0"
+queues = ["temporalrca:jobs", "temporalrca:priority", "temporalrca:scheduled"]
+streams = ["temporalrca:events"]
+queue_stats_key = "temporalrca:telemetry:queue_stats"
+services = ["producer", "burst-producer", "priority-producer", "consumer", "consumer-b", "priority-consumer", "scheduled-consumer", "report-cron", "cleanup-cron", "event-publisher", "event-worker"]
+interval_seconds = 10

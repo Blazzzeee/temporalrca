@@ -1,0 +1,15 @@
+experiments:
+  - name: cpu-saturation
+    scenario: cpu_pressure
+    host: vm2
+    duration_seconds: 30
+    parameters:
+      workers: 2
+  - name: redis-backlog
+    scenario: redis_backlog
+    host: vm1
+    duration_seconds: 30
+    parameters:
+      queue: temporalrca:jobs
+      items: 500
+

@@ -1,0 +1,13 @@
+central_server = "http://api:8000"
+state_dir = "/var/lib/temporalrca-agent"
+proc_root = "/proc"
+collection_interval_seconds = 15
+discovery_interval_seconds = 15
+max_monitored_processes = 25
+spool_max_bytes = 134217728
+spool_max_age_seconds = 86400
+docker_collection_enabled = false
+
+[host_attributes]
+node_kind = "container"
+runtime = "docker-compose"

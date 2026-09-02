@@ -1,0 +1,58 @@
+central_server = "http://127.0.0.1:8000"
+host_name = "worker-01"
+state_dir = "/var/lib/temporalrca-agent"
+collection_interval_seconds = 1
+discovery_interval_seconds = 5
+spool_max_bytes = 536870912
+spool_max_age_seconds = 86400
+docker_socket = "/var/run/docker.sock"
+docker_collection_enabled = true
+docker_collection_interval_seconds = 1
+
+# Supply TEMPORALRCA_ENROLLMENT_TOKEN on first start. The returned credential is
+# persisted in the state directory and used thereafter.
+
+[[services]]
+service = "example-worker"
+systemd_unit = "example-worker.service"
+
+[[services]]
+service = "example-api"
+command_regex = "uvicorn.*example"
+
+[[logs]]
+name = "example-worker-journal"
+type = "journald"
+unit = "example-worker.service"
+service = "example-worker"
+max_lines_per_second = 1000
+
+[[logs]]
+name = "example-file"
+type = "file"
+path = "/var/log/example/events.jsonl"
+service = "example-api"
+max_line_bytes = 65536
+max_lines_per_second = 1000
+
+[[metrics]]
+name = "example-api"
+url = "http://127.0.0.1:9100/metrics"
+service = "example-api"
+
+[[dependencies]]
+name = "orders-postgres"
+type = "postgresql"
+dsn = "postgresql://observer:secret@127.0.0.1/orders"
+interval_seconds = 5
+pg_stat_statements = false
+services = ["example-api"]
+
+[[dependencies]]
+name = "jobs-redis"
+type = "redis"
+dsn = "redis://:secret@127.0.0.1:6379/0"
+queues = ["jobs:ready", "jobs:failed"]
+streams = ["orders:events"]
+queue_stats_key = "temporalrca:telemetry:queue_stats"
+services = ["example-worker"]

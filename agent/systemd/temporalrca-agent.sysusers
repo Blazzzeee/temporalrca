@@ -1,0 +1,3 @@
+u temporalrca-agent - "TemporalRCA reporting agent" /var/lib/temporalrca-agent /usr/sbin/nologin
+m temporalrca-agent systemd-journal
+

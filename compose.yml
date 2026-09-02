@@ -1,0 +1,527 @@
+name: temporalrca
+
+x-server-environment: &server-environment
+  TEMPORALRCA_DATABASE_URL: postgresql+asyncpg://temporalrca:${POSTGRES_PASSWORD:-temporalrca}@platform-postgres:5432/temporalrca
+  # Keep read capacity available while many agents replay durable backlogs.
+  TEMPORALRCA_DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-24}
+  TEMPORALRCA_DATABASE_MAX_OVERFLOW: ${DATABASE_MAX_OVERFLOW:-8}
+  TEMPORALRCA_ENROLLMENT_TOKEN: ${ENROLLMENT_TOKEN:-development-enrollment-token}
+  TEMPORALRCA_GROUND_TRUTH_TOKEN: ${GROUND_TRUTH_TOKEN:-development-ground-truth-token}
+  TEMPORALRCA_CREDENTIAL_PEPPER: ${CREDENTIAL_PEPPER:-development-only-change-me}
+  TEMPORALRCA_EXPORT_DIRECTORY: /exports
+
+x-server-build: &server-build
+  context: .
+  dockerfile: server/Dockerfile
+
+x-workload: &workload
+  # Keep demo workload noise out of the default `docker compose up` stream.
+  # Logs remain available through Docker when explicitly requested.
+  attach: false
+  build:
+    context: .
+    dockerfile: demo-workload/Dockerfile
+    target: runtime
+  pull_policy: build
+  depends_on:
+    monitored-postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    api:
+      condition: service_healthy
+  restart: unless-stopped
+
+x-workload-environment: &workload-environment
+  TEMPORALRCA_ENROLLMENT_TOKEN: ${ENROLLMENT_TOKEN:-development-enrollment-token}
+  TEMPORALRCA_NODE_KIND: container
+  TEMPORALRCA_NODE_RUNTIME: docker-compose
+  TEMPORALRCA_METRICS_URL: http://127.0.0.1:9100/metrics
+  TEMPORALRCA_LOG_PATH: /var/log/temporalrca/demo.jsonl
+  TEMPORALRCA_DISCOVER_RUNTIME_DEPENDENCIES: "true"
+  # Fifteen-second workload samples retain useful temporal resolution without
+  # making every embedded agent out-produce the central ingest path.
+  TEMPORALRCA_COLLECTION_INTERVAL_SECONDS: ${AGENT_COLLECTION_INTERVAL_SECONDS:-15}
+  TEMPORALRCA_DEPENDENCY_INTERVAL_SECONDS: ${AGENT_DEPENDENCY_INTERVAL_SECONDS:-15}
+
+services:
+  platform-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: temporalrca
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-temporalrca}
+      POSTGRES_DB: temporalrca
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporalrca -d temporalrca"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - platform-postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  migrate:
+    attach: false
+    build: *server-build
+    command: ["alembic", "upgrade", "head"]
+    environment: *server-environment
+    depends_on:
+      platform-postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: *server-build
+    environment: *server-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - exports:/exports
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  maintenance:
+    attach: false
+    build: *server-build
+    command: ["temporalrca-maintenance"]
+    environment: *server-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  dashboard:
+    build: ./dashboard
+    # Re-evaluate the dashboard image on every `compose up`. Docker still uses
+    # cached layers, so only source changes and subsequent build steps rerun.
+    pull_policy: build
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  caddy:
+    attach: false
+    image: caddy:2.10-alpine
+    environment:
+      CADDY_HOST: ${CADDY_HOST:-:80}
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      dashboard:
+        condition: service_healthy
+    restart: unless-stopped
+
+  monitored-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: workload
+      POSTGRES_PASSWORD: workload
+      POSTGRES_DB: workload
+    command: ["postgres", "-c", "track_io_timing=on"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workload -d workload"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "5433:5432"
+    volumes:
+      - monitored-postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    attach: false
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  producer:
+    <<: *workload
+    command: producer
+    environment:
+      <<: *workload-environment
+      REDIS_URL: redis://redis:6379/0
+      SERVICE_NAME: producer
+      LOG_FILE: /var/log/temporalrca/demo.jsonl
+      WORK_INTERVAL: "0.75"
+      LOG_EVERY: "5"
+    volumes:
+      - producer-agent-state:/var/lib/temporalrca-agent
+    ports:
+      - "9101:9100"
+
+  burst-producer:
+    <<: *workload
+    command: burst-producer
+    environment:
+      <<: *workload-environment
+      REDIS_URL: redis://redis:6379/0
+      SERVICE_NAME: burst-producer
+      LOG_FILE: /var/log/temporalrca/demo.jsonl
+      WORK_INTERVAL: "8"
+      BATCH_SIZE: "24"
+    volumes:
+      - burst-producer-agent-state:/var/lib/temporalrca-agent
+
+  priority-producer:
+    <<: *workload
+    command: priority-producer
+    environment:
+      <<: *workload-environment
+      REDIS_URL: redis://redis:6379/0
+      SERVICE_NAME: priority-producer
+      LOG_FILE: /var/log/temporalrca/demo.jsonl
+      WORK_INTERVAL: "1.1"
+      LOG_EVERY: "4"
+    volumes:
+      - priority-producer-agent-state:/var/lib/temporalrca-agent
+
+  consumer:
+    <<: *workload
+    command: consumer
+    environment:
+      <<: *workload-environment
+      REDIS_URL: redis://redis:6379/0
+      MONITORED_DATABASE_URL: postgresql://workload:workload@monitored-postgres/workload
+      SERVICE_NAME: consumer
+      LOG_FILE: /var/log/temporalrca/demo.jsonl
+      LOG_EVERY: "5"
+    volumes:
+      - consumer-agent-state:/var/lib/temporalrca-agent
+
+  consumer-b:
+    <<: *workload
+    command: consumer-b
+    environment:
+      <<: *workload-environment
+      REDIS_URL: redis://redis:6379/0
+      MONITORED_DATABASE_URL: postgresql://workload:workload@monitored-postgres/workload
+      SERVICE_NAME: consumer-b
+      LOG_FILE: /var/log/temporalrca/demo.jsonl
+      LOG_EVERY: "5"
+      FAILURE_RATE: "0.02"
+    volumes:
+      - consumer-b-agent-state:/var/lib/temporalrca-agent
+
+  priority-consumer:
+    <<: *workload
+    command: priority-consumer
+    environment:
+      <<: *workload-environment
+      REDIS_URL: redis://redis:6379/0
+      MONITORED_DATABASE_URL: postgresql://workload:workload@monitored-postgres/workload
+      SERVICE_NAME: priority-consumer
+      LOG_FILE: /var/log/temporalrca/demo.jsonl
+      LOG_EVERY: "4"
+    volumes:
+      - priority-consumer-agent-state:/var/lib/temporalrca-agent
+
+  scheduled-consumer:
+    <<: *workload
+    command: scheduled-consumer
+    environment:
+      <<: *workload-environment
+      REDIS_URL: redis://redis:6379/0
+      MONITORED_DATABASE_URL: postgresql://workload:workload@monitored-postgres/workload
+      SERVICE_NAME: scheduled-consumer
+      LOG_FILE: /var/log/temporalrca/demo.jsonl
+    volumes:
+      - scheduled-consumer-agent-state:/var/lib/temporalrca-agent
+
+  report-cron:
+    <<: *workload
+    command: report-cron
+    environment:
+      <<: *workload-environment
+      REDIS_URL: redis://redis:6379/0
+      SERVICE_NAME: report-cron
+      LOG_FILE: /var/log/temporalrca/demo.jsonl
+      CRON_INTERVAL: "15"
+    volumes:
+      - report-cron-agent-state:/var/lib/temporalrca-agent
+
+  cleanup-cron:
+    <<: *workload
+    command: cleanup-cron
+    environment:
+      <<: *workload-environment
+      REDIS_URL: redis://redis:6379/0
+      SERVICE_NAME: cleanup-cron
+      LOG_FILE: /var/log/temporalrca/demo.jsonl
+      CRON_INTERVAL: "30"
+    volumes:
+      - cleanup-cron-agent-state:/var/lib/temporalrca-agent
+
+  event-publisher:
+    <<: *workload
+    command: event-publisher
+    environment:
+      <<: *workload-environment
+      REDIS_URL: redis://redis:6379/0
+      SERVICE_NAME: event-publisher
+      LOG_FILE: /var/log/temporalrca/demo.jsonl
+      WORK_INTERVAL: "2.5"
+    volumes:
+      - event-publisher-agent-state:/var/lib/temporalrca-agent
+
+  event-worker:
+    <<: *workload
+    command: event-worker
+    environment:
+      <<: *workload-environment
+      REDIS_URL: redis://redis:6379/0
+      MONITORED_DATABASE_URL: postgresql://workload:workload@monitored-postgres/workload
+      SERVICE_NAME: event-worker
+      LOG_FILE: /var/log/temporalrca/demo.jsonl
+      FAILURE_RATE: "0.03"
+    volumes:
+      - event-worker-agent-state:/var/lib/temporalrca-agent
+
+  database-worker:
+    <<: *workload
+    command: database-worker
+    environment:
+      <<: *workload-environment
+      MONITORED_DATABASE_URL: postgresql://workload:workload@monitored-postgres/workload
+      SERVICE_NAME: database-worker
+      LOG_FILE: /var/log/temporalrca/demo.jsonl
+      WORK_INTERVAL: "12"
+    volumes:
+      - database-worker-agent-state:/var/lib/temporalrca-agent
+
+  file-processor:
+    <<: *workload
+    command: file-processor
+    environment:
+      <<: *workload-environment
+      SERVICE_NAME: file-processor
+      LOG_FILE: /var/log/temporalrca/demo.jsonl
+      WORK_DIR: /work
+      LOG_EVERY: "3"
+    volumes:
+      - file-processor-agent-state:/var/lib/temporalrca-agent
+      - workload-files:/work
+
+  agent:
+    attach: false
+    build:
+      context: ./agent
+      target: runtime
+    environment:
+      TEMPORALRCA_ENROLLMENT_TOKEN: ${ENROLLMENT_TOKEN:-development-enrollment-token}
+      TEMPORALRCA_COLLECTION_INTERVAL_SECONDS: ${AGENT_COLLECTION_INTERVAL_SECONDS:-15}
+    command: ["--config", "/etc/temporalrca-agent/config.toml", "run"]
+    cap_add: ["SYS_PTRACE", "DAC_READ_SEARCH"]
+    # Cgroup discovery supplies inventory; the Engine socket supplies actual
+    # container CPU, memory, network, and block-I/O samples.
+    group_add: ["${DOCKER_GID:-973}"]
+    volumes:
+      - ./config/agent.host.compose.toml:/etc/temporalrca-agent/config.toml:ro
+      - /proc:/host/proc:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - agent-state:/var/lib/temporalrca-agent
+    depends_on:
+      api:
+        condition: service_healthy
+      producer:
+        condition: service_started
+      consumer:
+        condition: service_started
+      file-processor:
+        condition: service_started
+    restart: unless-stopped
+
+  experiment-runner:
+    profiles: ["experiments"]
+    build: ./deployment/experiment-runner
+    command: ["scenarios.compose.yml"]
+    environment:
+      TEMPORALRCA_URL: http://api:8000
+      TEMPORALRCA_GROUND_TRUTH_TOKEN: ${GROUND_TRUTH_TOKEN:-development-ground-truth-token}
+      MONITORED_DATABASE_URL: postgresql://workload:workload@monitored-postgres/workload
+      REDIS_URL: redis://redis:6379/0
+      GROUND_TRUTH_LOG: /results/ground-truth.jsonl
+    cap_add: ["NET_ADMIN"]
+    volumes:
+      - experiment-results:/results
+      - ./deployment/experiment-runner/scenarios.compose.yml:/runner/scenarios.compose.yml:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      agent:
+        condition: service_started
+    restart: "no"
+
+  ansible:
+    profiles: ["deployment"]
+    build: ./deployment/ansible
+    working_dir: /workspace
+    volumes:
+      - .:/workspace:ro
+      - ${SSH_AUTH_SOCK:-/dev/null}:/ssh-agent
+    environment:
+      SSH_AUTH_SOCK: /ssh-agent
+
+  acceptance:
+    profiles: ["tools"]
+    image: python:3.12-slim
+    working_dir: /workspace
+    entrypoint: ["python", "deployment/acceptance/verify.py"]
+    command: ["--url", "http://api:8000"]
+    volumes:
+      - .:/workspace:ro
+    depends_on:
+      api:
+        condition: service_healthy
+
+  benchmark:
+    profiles: ["tools"]
+    build: ./deployment/benchmark
+    command: ["--server", "http://api:8000", "--output", "/workspace/benchmark-results.csv"]
+    volumes:
+      - .:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      agent:
+        condition: service_started
+
+  demo-test:
+    profiles: ["test"]
+    build:
+      context: .
+      dockerfile: demo-workload/Dockerfile
+      target: test
+
+  agent-test:
+    profiles: ["test"]
+    build:
+      context: ./agent
+      target: test
+
+  server-test:
+    profiles: ["test"]
+    build:
+      <<: *server-build
+      target: test
+    environment:
+      <<: *server-environment
+      TEMPORALRCA_DATABASE_URL: postgresql+asyncpg://temporalrca:temporalrca@platform-postgres-test:5432/temporalrca_test
+      TEMPORALRCA_TEST_URL: http://api-test:8000
+    depends_on:
+      api-test:
+        condition: service_healthy
+
+  platform-postgres-test:
+    profiles: ["test"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: temporalrca
+      POSTGRES_PASSWORD: temporalrca
+      POSTGRES_DB: temporalrca_test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporalrca -d temporalrca_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  migrate-test:
+    profiles: ["test"]
+    build: *server-build
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *server-environment
+      TEMPORALRCA_DATABASE_URL: postgresql+asyncpg://temporalrca:temporalrca@platform-postgres-test:5432/temporalrca_test
+    depends_on:
+      platform-postgres-test:
+        condition: service_healthy
+
+  api-test:
+    profiles: ["test"]
+    build: *server-build
+    environment:
+      <<: *server-environment
+      TEMPORALRCA_DATABASE_URL: postgresql+asyncpg://temporalrca:temporalrca@platform-postgres-test:5432/temporalrca_test
+    depends_on:
+      migrate-test:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  dashboard-test:
+    profiles: ["test"]
+    build:
+      context: ./dashboard
+      target: test
+
+  dashboard-codegen:
+    profiles: ["tools"]
+    build:
+      context: ./dashboard
+      target: codegen
+    environment:
+      OPENAPI_SCHEMA: http://api:8000/openapi.json
+    volumes:
+      - ./dashboard/src/lib/types:/app/src/lib/types
+    depends_on:
+      api:
+        condition: service_healthy
+
+
+volumes:
+  agent-state: {}
+  burst-producer-agent-state: {}
+  caddy-config: {}
+  caddy-data: {}
+  cleanup-cron-agent-state: {}
+  consumer-agent-state: {}
+  consumer-b-agent-state: {}
+  database-worker-agent-state: {}
+  demo-logs: {}
+  event-publisher-agent-state: {}
+  event-worker-agent-state: {}
+  experiment-results: {}
+  exports: {}
+  file-processor-agent-state: {}
+  monitored-postgres-data: {}
+  platform-postgres-data: {}
+  priority-consumer-agent-state: {}
+  priority-producer-agent-state: {}
+  producer-agent-state: {}
+  redis-data: {}
+  report-cron-agent-state: {}
+  scheduled-consumer-agent-state: {}
+  workload-files: {}

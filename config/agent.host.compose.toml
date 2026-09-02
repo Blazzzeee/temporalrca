@@ -1,0 +1,15 @@
+central_server = "http://api:8000"
+host_name = "yoga-7"
+state_dir = "/var/lib/temporalrca-agent"
+proc_root = "/host/proc"
+collection_interval_seconds = 15
+discovery_interval_seconds = 15
+max_monitored_processes = 50
+spool_max_bytes = 536870912
+spool_max_age_seconds = 86400
+docker_collection_enabled = true
+docker_collection_interval_seconds = 10
+
+[host_attributes]
+node_kind = "machine"
+runtime = "linux"

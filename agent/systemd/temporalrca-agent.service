@@ -1,0 +1,43 @@
+[Unit]
+Description=TemporalRCA reporting agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=temporalrca-agent
+Group=temporalrca-agent
+SupplementaryGroups=systemd-journal docker
+EnvironmentFile=-/etc/temporalrca-agent/environment
+ExecStart=/opt/temporalrca-agent/bin/temporalrca-agent --config /etc/temporalrca-agent/config.toml run
+Restart=always
+RestartSec=3s
+StateDirectory=temporalrca-agent
+StateDirectoryMode=0750
+
+# Read-only process inspection, including processes owned by workload accounts.
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
+AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
+ProtectProc=ptraceable
+ProcSubset=all
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/temporalrca-agent
+
+[Install]
+WantedBy=multi-user.target
