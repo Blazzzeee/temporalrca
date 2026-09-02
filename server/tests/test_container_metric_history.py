@@ -67,10 +67,9 @@ async def test_container_metric_filters_include_same_name_history_without_cross_
 
     queried = await query_metrics(
         start=now - timedelta(seconds=1), end=now + timedelta(seconds=2),
-        container_id=current.id, aggregation="raw", max_points=100, session=session,
+        series_id=[], container_id=current.id, aggregation="raw", max_points=100, session=session,
     )
     assert {row["series_id"] for row in queried["series"]} == {old_series.id, current_series.id}
     points = {row["series_id"]: row["points"] for row in queried["series"]}
     assert points[old_series.id][0]["last"] == 1.0
     assert points[current_series.id][0]["last"] == 2.0
-
